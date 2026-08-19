@@ -515,7 +515,7 @@
   </div>
 
   <div class="musicrow">
-    <p class="musicnote">Background music — your own track isn't saved, pick it each time</p>
+    <p class="musicnote" id="musicMsg">Background music — your own track isn't saved, pick it each time</p>
     <button class="btn quiet sound is-on" type="button" id="soundToggle" aria-pressed="true">
       <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
         <path d="M4 9.5 L8 9.5 L13 5.5 L13 18.5 L8 14.5 L4 14.5 Z"/>
@@ -525,7 +525,7 @@
       </svg>
       <span id="soundLabel">Music on</span>
     </button>
-    <input type="file" id="fileMusic" accept="audio/*">
+    <input type="file" id="fileMusic" accept="audio/*,.mp3,.m4a,.aac,.wav,.ogg,.oga,.flac">
     <button class="btn quiet" type="button" id="pickMusic">Use my own music</button>
     <button class="btn quiet hidden" type="button" id="resetMusic">Back to original</button>
   </div>
@@ -1092,7 +1092,19 @@
   });
 
   /* ================= MUSIC ================= */
-  var soundOn = true, playing = false, customURL = null;
+  var soundOn = true, playing = false;
+  var MUSIC_DEFAULT = "Background music — your own track isn't saved, pick it each time";
+  var musicMsgTimer = null;
+
+  function musicNote(text, sticky){
+    var el = $("musicMsg");
+    if(!el) return;
+    el.textContent = text;
+    clearTimeout(musicMsgTimer);
+    if(!sticky){
+      musicMsgTimer = setTimeout(function(){ el.textContent = MUSIC_DEFAULT; }, 5000);
+    }
+  }
   var originalTrack = bgm.getAttribute("src");
   bgm.volume = 0.28;
 
@@ -1131,18 +1143,52 @@
   $("fileMusic").addEventListener("change", function(){
     var f = this.files && this.files[0];
     if(!f) return;
-    if(customURL) URL.revokeObjectURL(customURL);
-    customURL = URL.createObjectURL(f);
-    bgm.src = customURL;
-    playing = false;
-    $("resetMusic").classList.remove("hidden");
-    if(!soundOn){ soundOn = true; paintSound(); }
-    startMusic();
+
+    musicNote("Loading \u201c" + f.name + "\u201d\u2026", true);
+
+    // iPhones won't play a blob: address in an audio player, so read the whole
+    // file in instead. Slower on a big track, but it works everywhere.
+    var reader = new FileReader();
+
+    reader.onload = function(){
+      bgm.src = reader.result;
+      playing = false;
+      $("resetMusic").classList.remove("hidden");
+      if(!soundOn){ soundOn = true; paintSound(); }
+      var p = bgm.play();
+      if(p && p.then){
+        p.then(function(){
+          playing = true;
+          musicNote("Now playing \u201c" + f.name + "\u201d");
+        })["catch"](function(){
+          // the tap that picked the file has expired by now on some phones
+          musicNote("Ready \u2014 tap anywhere to start your track", true);
+        });
+      }else{
+        playing = true;
+      }
+    };
+
+    reader.onerror = function(){
+      musicNote("Couldn't read that file. Try an MP3 or M4A.", true);
+    };
+
+    try{
+      reader.readAsDataURL(f);
+    }catch(e){
+      musicNote("Couldn't read that file. Try an MP3 or M4A.", true);
+    }
+  });
+
+  // a file the browser can't decode (DRM, or an unusual format) lands here
+  bgm.addEventListener("error", function(){
+    if(bgm.src && bgm.src.indexOf("data:audio/mp4") === 0) return;
+    musicNote("That track won't play here. Try an MP3 or M4A.", true);
   });
 
   $("resetMusic").addEventListener("click", function(){
-    if(customURL){ URL.revokeObjectURL(customURL); customURL = null; }
     bgm.src = originalTrack;
+    musicNote("Back to the original track");
     $("fileMusic").value = "";
     $("resetMusic").classList.add("hidden");
     playing = false;
