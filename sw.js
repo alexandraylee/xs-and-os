@@ -1,5 +1,5 @@
 /* X's & O's — caches the game so it plays with no connection. */
-var CACHE = "xsandos-v2";
+var CACHE = "xsandos-v3";
 var ASSETS = [
   "./",
   "./index.html",

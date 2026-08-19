@@ -515,7 +515,7 @@
   </div>
 
   <div class="musicrow">
-    <p class="musicnote" id="musicMsg">Background music — your own track isn't saved, pick it each time</p>
+    <p class="musicnote" id="musicMsg">Background music — your own track is saved for next time</p>
     <button class="btn quiet sound is-on" type="button" id="soundToggle" aria-pressed="true">
       <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
         <path d="M4 9.5 L8 9.5 L13 5.5 L13 18.5 L8 14.5 L4 14.5 Z"/>
@@ -1093,7 +1093,7 @@
 
   /* ================= MUSIC ================= */
   var soundOn = true, playing = false;
-  var MUSIC_DEFAULT = "Background music — your own track isn't saved, pick it each time";
+  var MUSIC_DEFAULT = "Background music — your own track is saved for next time";
   var musicMsgTimer = null;
 
   function musicNote(text, sticky){
@@ -1107,6 +1107,64 @@
   }
   var originalTrack = bgm.getAttribute("src");
   bgm.volume = 0.28;
+
+  /* A song can run to several megabytes, which is far past what localStorage
+     will hold, so the track goes in IndexedDB instead. Both live on the device,
+     so both work with no connection. */
+  var DB_NAME = "xsandos", STORE = "media", MUSIC_KEY = "music";
+
+  function withDB(cb){
+    try{
+      if(!window.indexedDB){ cb(null); return; }
+      var req = indexedDB.open(DB_NAME, 1);
+      req.onupgradeneeded = function(){
+        var db = req.result;
+        if(!db.objectStoreNames.contains(STORE)) db.createObjectStore(STORE);
+      };
+      req.onsuccess = function(){ cb(req.result); };
+      req.onerror = function(){ cb(null); };
+      req.onblocked = function(){ cb(null); };
+    }catch(e){ cb(null); }
+  }
+
+  function saveTrack(name, blob, done){
+    withDB(function(db){
+      if(!db){ done(false); return; }
+      try{
+        var tx = db.transaction(STORE, "readwrite");
+        tx.objectStore(STORE).put({name: name, blob: blob}, MUSIC_KEY);
+        tx.oncomplete = function(){ done(true); };
+        tx.onerror = function(){ done(false); };
+        tx.onabort = function(){ done(false); };
+      }catch(e){ done(false); }
+    });
+  }
+
+  function loadTrack(done){
+    withDB(function(db){
+      if(!db){ done(null); return; }
+      try{
+        var r = db.transaction(STORE, "readonly").objectStore(STORE).get(MUSIC_KEY);
+        r.onsuccess = function(){ done(r.result || null); };
+        r.onerror = function(){ done(null); };
+      }catch(e){ done(null); }
+    });
+  }
+
+  function clearTrack(){
+    withDB(function(db){
+      if(!db) return;
+      try{ db.transaction(STORE, "readwrite").objectStore(STORE)["delete"](MUSIC_KEY); }
+      catch(e){}
+    });
+  }
+
+  function blobToDataURL(blob, ok, fail){
+    var reader = new FileReader();
+    reader.onload = function(){ ok(reader.result); };
+    reader.onerror = fail;
+    try{ reader.readAsDataURL(blob); }catch(e){ fail(); }
+  }
 
   function startMusic(){
     if(!soundOn || playing) return;
@@ -1155,18 +1213,23 @@
       playing = false;
       $("resetMusic").classList.remove("hidden");
       if(!soundOn){ soundOn = true; paintSound(); }
-      var p = bgm.play();
-      if(p && p.then){
-        p.then(function(){
+
+      // keep it for next time
+      saveTrack(f.name, f, function(saved){
+        var p = bgm.play();
+        var label = saved ? "Now playing \u201c" + f.name + "\u201d \u2014 saved for next time"
+                          : "Now playing \u201c" + f.name + "\u201d \u2014 too large to save";
+        if(p && p.then){
+          p.then(function(){ playing = true; musicNote(label); })
+           ["catch"](function(){
+             // the tap that picked the file has expired by now on some phones
+             musicNote("Ready \u2014 tap anywhere to start your track", true);
+           });
+        }else{
           playing = true;
-          musicNote("Now playing \u201c" + f.name + "\u201d");
-        })["catch"](function(){
-          // the tap that picked the file has expired by now on some phones
-          musicNote("Ready \u2014 tap anywhere to start your track", true);
-        });
-      }else{
-        playing = true;
-      }
+          musicNote(label);
+        }
+      });
     };
 
     reader.onerror = function(){
@@ -1187,6 +1250,7 @@
   });
 
   $("resetMusic").addEventListener("click", function(){
+    clearTrack();
     bgm.src = originalTrack;
     musicNote("Back to the original track");
     $("fileMusic").value = "";
@@ -1216,6 +1280,18 @@
   }catch(e){}
 
   loadSetup();
+
+  // bring back the track chosen last time, if there is one
+  loadTrack(function(rec){
+    if(!rec || !rec.blob) return;
+    blobToDataURL(rec.blob, function(dataURL){
+      bgm.src = dataURL;
+      playing = false;
+      $("resetMusic").classList.remove("hidden");
+      musicNote("Your track \u201c" + (rec.name || "music") + "\u201d is ready");
+    }, function(){});
+  });
+
   paintSound();
   paintScores();
   render();
